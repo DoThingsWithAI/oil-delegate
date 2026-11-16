@@ -89,6 +89,8 @@ npx skills add oil-oil/oil-delegate
 - 任务内容会交给你选择的 Agent 及其模型服务，可能产生费用。不要在任务中放密钥。
 - 默认最高权限意味着 Agent 可以修改文件、执行命令，部分 Runner 还可以访问工作区外内容。静态 deny、管理锁和登录问题仍可能造成失败。重要项目请先确认修改范围，并检查结果和测试。
 
+关于什么场景适合派发子 Agent、不同角色怎么分工，可以参考 Oil Book 里的[《怎样用好子 Agent》](https://book.oiloil.org/articles/subagent-workflow?utm_source=github&utm_medium=referral&utm_campaign=oil-delegate-readme)。
+
 <details>
 <summary>维护、测试与排查</summary>
 

@@ -27,6 +27,7 @@
 | DeepSeek Harness | `dsh`、`deepseek`、`deepseek-harness` |
 | Grok Build | `grok`、`grok-build` |
 | Kimi Code | `kimi`、`kimi-code` |
+| Cursor | `cursor`、`cursor-agent`、`cursor-cli` |
 
 ## 怎么用
 

@@ -1,6 +1,6 @@
 # 隔离委托（macOS / Linux）
 
-这是可选的严格隔离入口，适用于 Codex 与 DeepSeek Harness。原有 scripts/delegate.py 仍可用于可信本机任务，但不提供统一 OS 级隔离。对不可信仓库、涉及文件写入或敏感环境的任务，优先采用本入口；环境不满足时停止，不要自动退回直接执行。
+这是用户主动选择的高级容器隔离入口，适用于 Codex 与 DeepSeek Harness，不是日常依赖。Mac 日常使用请看 [本机轻量模式](native.md)。原有 scripts/delegate.py 仍可用于可信本机任务，但不提供统一 OS 级隔离。需要实际 OS 级隔离的任务才考虑本入口；环境不满足时停止，不要自动退回直接执行。
 
 ## 准备
 

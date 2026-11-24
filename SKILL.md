@@ -3,7 +3,7 @@ name: oil-delegate
 description: "把边界清楚的单次任务委托给 Claude Code（cc）、WorkBuddy（wb）、Antigravity（agy）、Codex、Cursor、OpenCode、DeepSeek Harness（dsh）、Grok Build（grok）或 Kimi Code（kimi）CLI，返回结构化结果并续接原会话；处理首次静默扫描、启用执行器与默认选择，并可按用途（代码审查、方案挑刺、疑难会诊、实现）记住各自交给谁。用户明确要求 oil-delegate、统一调用或用上述全称/别名继续这些外部 CLI Agent 时使用；不用于普通直接问答或显式 /codex。"
 license: MIT
 metadata:
-  version: "0.7.3"
+  version: "0.7.4"
 ---
 
 # oil-delegate
@@ -69,9 +69,10 @@ DELEGATE config --set-bin <runner>=<可执行文件绝对路径>
 
 ### 2. 派发新任务
 
-- 日常默认直接调用本机 CLI，不要求 Docker。只读分析使用原 DELEGATE；明确授权写入时优先使用 [本机 Worktree 入口](references/native.md)（DSH/Codex），按配置选择 runner，传入仓库路径与任务，不直接改主工作区。只有用户主动要求容器或任务需要严格 OS 隔离且用户认可环境时，才使用 [可选 Docker 入口](references/isolation.md)；条件不足时停止，不自动降级。
+- 日常默认直接调用本机 CLI，不要求 Docker。只读分析使用原 DELEGATE；明确授权写入时优先使用 [本机 Worktree 入口](references/native.md)（DSH/Codex/Claude Code），按配置选择 runner，传入仓库路径与任务，不直接改主工作区。只有用户主动要求容器或任务需要严格 OS 隔离且用户认可环境时，才使用 [可选 Docker 入口](references/isolation.md)；条件不足时停止，不自动降级。
 
-- 默认使用 `read`；只有任务明确授权改代码时使用 `--mode write` 或 implement 角色。写入仅支持 Codex/DSH 的 workspace-write，其他 Runner 明确拒绝，不自动升级权限。Kimi 暂停执行（非交互模式无法保证只读）。
+- 默认使用 `read`；只有任务明确授权改代码时使用 `--mode write` 或 implement 角色。写入支持 Codex/DSH 的 workspace-write，以及 Claude Code 的受限文件编辑模式（不开放 Bash、MCP 或 Web 工具；主 Agent 运行真实测试）。其他 Runner 明确拒绝，不自动升级权限。Kimi 暂停执行（非交互模式无法保证只读）。
+- Claude Code 可使用本机已配置的第三方 provider（例如智谱 GLM）；不覆盖模型、不更改登录、不保存密钥。首次使用前核实本机 CLI 的实际模型与计费渠道，shell alias 不会自动继承，可用可信的可执行启动脚本配置 runner。
 - 分析、探索、评审优先交给低成本外部 Agent，主 Agent 负责拆解、决策、验收；优先读取精简报告，不读取整份原始事件流。
 - 不委托提交、推送、部署、数据库及密钥操作；只处理用户认可可发送给对应 provider 的代码和任务内容。对不可信仓库或敏感代码使用独立账号/容器及文件系统隔离；plan 不是 OS 沙箱。
 - 默认使用当前工作目录，跨项目时显式指定 `--workspace`。

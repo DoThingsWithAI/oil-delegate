@@ -32,7 +32,7 @@ if os.environ.get("FAKE_CALL_LOG"):
     with open(os.environ["FAKE_CALL_LOG"], "a", encoding="utf-8") as handle:
         handle.write(json.dumps({{"runner": runner, "argv": args}}) + "\n")
 if "--version" in args:
-    print("fake-" + runner + "-1.0")
+    print(("2.1.313" if os.environ.get("FAKE_OLD_CLAUDE") else "2.1.314") + " (Claude Code)" if runner == "claude" else "fake-" + runner + "-1.0")
     raise SystemExit(0)
 if runner == "dsh" and "--help" in args:
     if os.environ.get("FAKE_DSH_LEGACY") == "1":
@@ -392,6 +392,7 @@ class DelegateTestCase(unittest.TestCase):
             "cursor": ["--mode", "plan"],
         }
         expected_write = {
+            "claude": ["--permission-mode", "acceptEdits"],
             "codex": ["--sandbox", "workspace-write"],
             "dsh": ["--permission-mode", "workspace-write"],
         }
@@ -795,6 +796,39 @@ class DelegateTestCase(unittest.TestCase):
                 result = self.result_of(proc)
                 self.assertEqual(result["status"], "failed")
                 self.assertTrue(result["error"])
+
+    def test_claude_glm_provider_is_inherited_and_tools_are_restricted(self) -> None:
+        self.onboard_all()
+        record_path = self.root / "record.json"
+        for mode in ("read", "write"):
+            proc = self.run_task("claude", mode=mode, extra_env={"FAKE_RECORD": str(record_path)})
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            argv = self.record_of()["argv"]
+            self.assertIn("--safe-mode", argv)
+            self.assertIn("--strict-mcp-config", argv)
+            self.assertNotIn("--dangerously-skip-permissions", argv)
+            self.assertNotIn("--model", argv)
+            tools = argv[argv.index("--tools") + 1].split(",")
+            self.assertNotIn("Bash", tools)
+            self.assertEqual("Edit" in tools, mode == "write")
+            self.assertEqual("Write" in tools, mode == "write")
+            settings = json.loads(argv[argv.index("--settings") + 1])
+            self.assertTrue(settings["permissions"]["blockReadsOutsideWorkingDirectories"])
+            self.assertTrue(settings["permissions"]["blockWritesOutsideWorkingDirectories"])
+        with mock.patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "glm-test-token",
+                                         "ANTHROPIC_BASE_URL": "https://example.invalid/api/anthropic",
+                                         "ANTHROPIC_MODEL": "glm-5.3",
+                                         "GITHUB_TOKEN": "test-github-token"}):
+            env = DELEGATE.child_environment("claude")
+            self.assertEqual(env["ANTHROPIC_MODEL"], "glm-5.3")
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "glm-test-token")
+            self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://example.invalid/api/anthropic")
+            self.assertNotIn("GITHUB_TOKEN", env)
+        old = self.run_task("claude", mode="write", extra_env={"FAKE_OLD_CLAUDE": "1"})
+        self.assertEqual(old.returncode, 1)
+        self.assertIn("2.1.314", old.stderr)
+        saved = self.run_cli("config", "--set-role", "implement=cc")
+        self.assertEqual(saved.returncode, 0, msg=saved.stderr)
 
     def test_security_boundaries(self) -> None:
         self.onboard_all()

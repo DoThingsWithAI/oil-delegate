@@ -131,7 +131,7 @@ def execute(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runner", required=True, choices=("dsh", "codex"))
+    parser.add_argument("--runner", required=True, choices=("dsh", "codex", "claude"))
     parser.add_argument("--workspace", required=True)
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--timeout", type=int, default=900)

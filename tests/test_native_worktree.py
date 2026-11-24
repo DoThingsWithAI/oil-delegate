@@ -19,6 +19,13 @@ class NativeWorktreeTests(unittest.TestCase):
         self.assertNotIn("docker", cmd)
         self.assertEqual(cmd[cmd.index("--session") + 1], "session-id")
 
+    def test_claude_native_write_uses_existing_runner(self):
+        args = argparse.Namespace(runner="claude", timeout=60, prompt="edit", file=[])
+        cmd = NATIVE.command(args, Path("/tmp/checkout"), "session-id")
+        self.assertEqual(cmd[cmd.index("--runner") + 1], "claude")
+        self.assertEqual(cmd[cmd.index("--mode") + 1], "write")
+        self.assertNotIn("--model", cmd)
+
     def test_snapshot_excludes_dirty_and_untracked_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

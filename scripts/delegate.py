@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -104,7 +105,8 @@ ROLE_DESCRIPTIONS = {
 ROLE_SLOTS = {"diagnose": 2}
 HOST_AGENT = "host"
 READ_ONLY_UNSUPPORTED = {"kimi"}
-WRITE_SUPPORTED = {"codex", "dsh"}
+WRITE_SUPPORTED = {"codex", "dsh", "claude"}
+CLAUDE_MIN_VERSION = (2, 1, 314)
 DEFAULT_RUN_TIMEOUT = 900
 MAX_RUN_TIMEOUT = 3600
 MAX_REPORT_CHARS = 12000
@@ -499,7 +501,7 @@ def apply_role(config: dict[str, Any], assignment: str) -> list[str]:
                 f"Role '{role}' runs read-only, which {', '.join(blocked)} cannot guarantee; choose another runner or host"
             )
     if ROLE_MODES[role] == "write" and any(r not in WRITE_SUPPORTED for r in runners):
-        raise DelegateError("Implement role requires codex or dsh (workspace-write), or host")
+        raise DelegateError("Implement role requires codex, dsh, claude (restricted editing), or host")
     validate_installed(runners, config)
     if runners:
         enabled = list(config.get("enabled_runners", []))
@@ -716,7 +718,7 @@ def build_invocation(
     dsh_capabilities: dict[str, Any] | None,
 ) -> tuple[list[str], str | None, dict[str, str]]:
     if mode == "write" and runner not in WRITE_SUPPORTED:
-        raise DelegateError(f"{runner} has no verified workspace-write adapter; choose codex or dsh")
+        raise DelegateError(f"{runner} has no verified workspace-write adapter; choose codex, dsh or claude")
     env: dict[str, str] = {}
     stdin_input: str | None = None
 
@@ -725,7 +727,27 @@ def build_invocation(
         if session_id:
             cmd.extend(["--resume", session_id])
         cmd.extend(["-p", prompt, "--output-format", "json"])
-        cmd.extend(["--permission-mode", "plan", "--permission-prompts", "none"])
+        # Keep the locally configured provider/model; do not supply --model or credentials.
+        # File tools only: no shell, MCP, web tools or custom hooks. Host runs tests.
+        tools = "Read,Glob,Grep" if mode == "read" else "Read,Glob,Grep,Edit,Write"
+        settings = {
+            "permissions": {
+                "blockReadsOutsideWorkingDirectories": True,
+                "blockWritesOutsideWorkingDirectories": True,
+                "deny": ["Bash", "WebFetch", "WebSearch", "Agent", "mcp__*",
+                         "Read(./.git)", "Edit(./.git)",
+                         "Read(./.env)", "Read(./.env.*)",
+                         "Edit(./.env)", "Edit(./.env.*)"],
+            }
+        }
+        cmd.extend([
+            "--safe-mode", "--setting-sources", "user",
+            "--permission-mode", "plan" if mode == "read" else "acceptEdits",
+            "--permission-prompts", "none", "--tools", tools,
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--disallowedTools", "mcp__*", "--settings",
+            json.dumps(settings, separators=(",", ":")),
+        ])
         return cmd, stdin_input, env
 
     if runner == "workbuddy":
@@ -1104,6 +1126,11 @@ def execute_run(
     binary_info = detect_binary(runner, config)
     if not binary_info["installed"]:
         raise DelegateError(binary_info["error"] or f"Runner not installed: {runner}")
+    if runner == "claude":
+        version = probe_version(binary_info["path"])
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)\b", version.get("version") or "")
+        if version.get("probe_error") or not match or tuple(map(int, match.groups())) < CLAUDE_MIN_VERSION:
+            raise DelegateError("Claude Code 2.1.314 or later is required for restricted local delegation; update the CLI")
     capabilities = probe_dsh_capabilities(binary_info["path"]) if runner == "dsh" else None
     command, stdin_input, env_updates = build_invocation(
         runner,

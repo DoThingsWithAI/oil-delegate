@@ -22,7 +22,7 @@
 
 优先级：环境变量 `OIL_DELEGATE_<RUNNER>_BIN` → 配置中的 runner path → PATH → 已知安装目录。所有调用使用 argv 数组，prompt 不经过 shell。常规调用不指定模型、provider 或思考强度。
 
-省略 `--mode` 时默认 `read`。明确授权开发时，write 仅支持 Codex 和 DSH 的 workspace-write；其他 Runner 拒绝写入，不回退到最高权限。权限参数只影响当前进程，不修改目标 CLI 的永久配置。
+省略 `--mode` 时默认 `read`。明确授权开发时，write 支持 Codex 和 DSH 的 workspace-write，以及 Claude Code 的受限文件编辑；其他 Runner 拒绝写入，不回退到最高权限。权限参数只影响当前进程，不修改目标 CLI 的永久配置。
 
 CLI 的 plan 和权限配置不等于 OS 级隔离。调用方必须确保仓库可信、内容可发给目标服务，必要时使用独立账号/容器。
 
@@ -30,8 +30,10 @@ CLI 的 plan 和权限配置不等于 OS 级隔离。调用方必须确保仓库
 
 - 发现：`claude`。
 - 新建：`claude -p <prompt> --output-format json`；续接增加 `--resume <session_id>`。
-- read：`--permission-mode plan --permission-prompts none`。
-- write：暂停（无已验证 workspace-write 适配）。
+- 要求 Claude Code 2.1.314+，旧版拒绝运行，不自动降级。
+- read：plan，仅 Read/Glob/Grep；write：acceptEdits，仅增加 Edit/Write。两种模式均禁用自定义插件/钩子、MCP 和 Bash/Web 工具，设置工作目录外读写限制，未经批准的工具请求拒绝。使用本机 Worktree 入口做写入；主 Agent 检查 diff 并执行测试。
+- 沿用 user 级配置或进程环境中的 provider/model/认证（例如 ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN、ANTHROPIC_MODEL）。不加 --model，不改配置文件，不复制密钥；如果 GLM 只通过交互 shell alias 或项目配置生效，需改用用户配置或已确认的可信启动脚本。实际计费取决于本机生效配置。
+- 这是 CLI 文件工具权限，不是整个进程的 OS 沙箱。仅适用于可信仓库和可信本机配置。
 - 解析：最终 JSON 的 `session_id`、`result`、`is_error`。
 - 认证：先用官方交互式 CLI 完成安装与登录；不要在包装器中输入或转存密钥。
 

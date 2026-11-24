@@ -82,13 +82,13 @@ npx skills add DoThingsWithAI/oil-delegate
 以后代码审查都交给 codex，方案评审用你自己就行。
 ```
 
-没有指定 Agent 时，它会使用你的默认选择；如果没有设置默认值，会先问你，不会擅自更换。默认只读；明确授权实现时，仅 Codex 和 DSH 使用 workspace-write。其他 Runner 暂只支持计划/分析（Kimi 暂停）。代码审查、方案评审和疑难会诊这三类用途一律只读。
+没有指定 Agent 时，它会使用你的默认选择；如果没有设置默认值，会先问你，不会擅自更换。默认只读；明确授权实现时，Codex 和 DSH 使用 workspace-write，Claude Code 支持受限文件编辑（不开放 shell，主 Agent 验证测试）。其他 Runner 暂只支持计划/分析（Kimi 暂停）。代码审查、方案评审和疑难会诊这三类用途一律只读。
 
 ## Mac 本机委托（默认，无需 Docker）
 
-只读分析直接使用本机 CLI。开发任务优先使用 `scripts/native_worktree.py`：从已提交 HEAD 创建独立 Git Worktree，使用本机已登录的 DSH/Codex 和 workspace-write 权限，不自动合并。详见 [本机配置与续接](references/native.md)。
+只读分析直接使用本机 CLI。开发任务优先使用 `scripts/native_worktree.py`：从已提交 HEAD 创建独立 Git Worktree，使用本机已配置的 DSH/Codex/Claude Code 与对应受限权限，不自动合并。详见 [本机配置与续接](references/native.md)。
 
-Docker 仅为用户主动选择的高级模式，详见 [容器隔离](references/isolation.md)。不安装 Docker 也可使用日常功能。Worktree 不等于系统安全沙箱。
+Claude Code 可复用本机已有的 GLM 等第三方模型配置（例如 GLM-5.3），不强制指定 Claude 模型；要求 Claude Code 2.1.314+，先核实实际 provider。Docker 仅为用户主动选择的高级模式，详见 [容器隔离](references/isolation.md)。不安装 Docker 也可使用日常功能。Worktree 不等于系统安全沙箱。
 
 ## 使用条件与边界
 

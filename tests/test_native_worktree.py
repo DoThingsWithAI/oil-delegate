@@ -20,9 +20,9 @@ class NativeWorktreeTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--session") + 1], "session-id")
 
     def test_claude_native_write_uses_existing_runner(self):
-        args = argparse.Namespace(runner="claude", timeout=60, prompt="edit", file=[])
+        args = argparse.Namespace(runner="claude-volces", timeout=60, prompt="edit", file=[])
         cmd = NATIVE.command(args, Path("/tmp/checkout"), "session-id")
-        self.assertEqual(cmd[cmd.index("--runner") + 1], "claude")
+        self.assertEqual(cmd[cmd.index("--runner") + 1], "claude-volces")
         self.assertEqual(cmd[cmd.index("--mode") + 1], "write")
         self.assertNotIn("--model", cmd)
 

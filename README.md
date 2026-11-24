@@ -20,6 +20,7 @@
 | Agent | 简称与别名 |
 | --- | --- |
 | Claude Code | `cc`、`claude`、`claude-code` |
+| 火山方舟 GLM-5.3（本机 Claude Code 启动器） | `claude-volces`、`volces`、`glm-5.3` |
 | WorkBuddy | `wb`、`workbuddy`、`codebuddy`、`cbc` |
 | Antigravity | `agy`、`antigravity` |
 | Codex | `codex` |
@@ -88,7 +89,7 @@ npx skills add DoThingsWithAI/oil-delegate
 
 只读分析直接使用本机 CLI。开发任务优先使用 `scripts/native_worktree.py`：从已提交 HEAD 创建独立 Git Worktree，使用本机已配置的 DSH/Codex/Claude Code 与对应受限权限，不自动合并。详见 [本机配置与续接](references/native.md)。
 
-Claude Code 可复用本机已有的 GLM 等第三方模型配置（例如 GLM-5.3），不强制指定 Claude 模型；要求 Claude Code 2.1.314+，先核实实际 provider。Docker 仅为用户主动选择的高级模式，详见 [容器隔离](references/isolation.md)。不安装 Docker 也可使用日常功能。Worktree 不等于系统安全沙箱。
+Claude Code 可复用本机已有的 GLM 等第三方模型配置（例如 GLM-5.3），不强制指定 Claude 模型；要求 Claude Code 2.1.314+，先核实实际 provider。火山方舟配置使用独立 `claude-volces` runner，不会回退普通 Claude；若为 shell alias，需配置可执行启动器。Docker 仅为用户主动选择的高级模式，详见 [容器隔离](references/isolation.md)。不安装 Docker 也可使用日常功能。Worktree 不等于系统安全沙箱。
 
 ## 使用条件与边界
 

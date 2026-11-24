@@ -7,7 +7,7 @@
 
 入口通过原 delegate.py 调用目标 CLI，继承其受限写入参数（Codex/DSH workspace-write；Claude Code acceptEdits 文件工具）、常见凭据过滤、日志控制及超时限制。新建独立 detached Git Worktree，只检出已提交 HEAD，不包含未提交的代码、未跟踪文件和本地 .env；如果本轮需要未提交的上下文，先由主 Agent 与用户确认处理方式，不擅自提交。常见已跟踪密钥文件名会导致拒绝，但不构成完整密钥扫描。
 
-若 Claude Code 已配置智谱 GLM（如 GLM-5.3），将示例的 --runner dsh 改为 --runner claude 即可复用本机 user 配置或进程环境，不指定模型、不修改 API 设置。要求 Claude Code 2.1.314+。Claude Code 只做文件读取和编辑，禁用 shell/MCP 等工具，由主 Agent 在工作树中运行真实测试。若模型配置仅位于交互 shell alias 或项目设置，先确认实际 provider，使用可信启动脚本或用户级配置，不要默默改用 Anthropic。
+若本机使用火山方舟 GLM-5.3 的 claude-volces 启动器，将示例的 --runner dsh 改为 --runner claude-volces；它只会寻找同名可执行文件，不会回退普通 claude。可用 config --set-bin claude-volces=/absolute/path 配置可信启动器。普通 Claude Code 使用 --runner claude。两者复用本机 user 配置或进程环境，不指定模型、不修改 API 设置。要求 Claude Code 2.1.314+。Claude Code 只做文件读取和编辑，禁用 shell/MCP 等工具，由主 Agent 在工作树中运行真实测试。若模型配置仅位于交互 shell alias 或项目设置，先确认实际 provider，使用可信启动脚本或用户级配置，不要默默改用 Anthropic。
 
 返回 run_id、worktree、session_id 和报告路径。主 Agent 检查该 worktree 的 git status / git diff 和测试结果，再选择性应用；不自动合并、提交、推送。对于返工使用同一个 runner 和仓库：
 

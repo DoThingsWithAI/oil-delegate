@@ -36,13 +36,13 @@
 最简单的方式是把下面这句话发给你的 Agent：
 
 ```text
-请帮我安装这个 Skill：https://github.com/oil-oil/oil-delegate
+请帮我安装这个 Skill：https://github.com/DoThingsWithAI/oil-delegate
 ```
 
 也可以使用命令安装：
 
 ```bash
-npx skills add oil-oil/oil-delegate
+npx skills add DoThingsWithAI/oil-delegate
 ```
 
 安装完成后，按 Agent 的提示重新加载 Skill 即可。
@@ -63,7 +63,7 @@ npx skills add oil-oil/oil-delegate
 ```
 
 ```text
-让 wb 修复这个测试，修改后运行相关检查。
+让 dsh 修复这个测试，修改后运行相关检查。
 ```
 
 ```text
@@ -75,20 +75,20 @@ npx skills add oil-oil/oil-delegate
 ```
 
 ```text
-用 grok 实现这个功能，让 kimi 再检查一遍。
+用 dsh 实现这个功能，让 grok 再检查一遍。
 ```
 
 ```text
 以后代码审查都交给 codex，方案评审用你自己就行。
 ```
 
-没有指定 Agent 时，它会使用你的默认选择；如果没有设置默认值，会先问你，不会擅自更换。默认按最高权限派发，尽量避免任务停在常规审批上；你明确要求只读时才会限制权限。代码审查、方案评审和疑难会诊这三类用途一律只读。
+没有指定 Agent 时，它会使用你的默认选择；如果没有设置默认值，会先问你，不会擅自更换。默认只读；明确授权实现时，仅 Codex 和 DSH 使用 workspace-write。其他 Runner 暂只支持计划/分析（Kimi 暂停）。代码审查、方案评审和疑难会诊这三类用途一律只读。
 
 ## 使用条件与边界
 
 - 需要 Python 3.10 或更高版本，以及至少一个已经安装并登录的受支持 Agent。macOS 已实测 Antigravity、Codex 和 Kimi Code 的新建与续接，以及 Antigravity、Codex 的真实写入；其他 Agent 能否直接完成任务，取决于本机登录和模型配置。Linux 和 Windows 尚未实机验证。
 - 任务内容会交给你选择的 Agent 及其模型服务，可能产生费用。不要在任务中放密钥。
-- 默认最高权限意味着 Agent 可以修改文件、执行命令，部分 Runner 还可以访问工作区外内容。静态 deny、管理锁和登录问题仍可能造成失败。重要项目请先确认修改范围，并检查结果和测试。
+- 安全增强版取消默认全权限、过滤常见跨服务环境凭据、默认不记录原始 prompt/事件、限制报告长度和运行时间。CLI 自身的 plan/沙箱并非统一的 OS 级隔离；本机认证文件、项目 `.env`、网络访问等风险仍需独立账号/容器及额外策略。重要项目先确认代码可交给目标服务，再检查改动和测试。
 
 关于什么场景适合派发子 Agent、不同角色怎么分工，可以参考 Oil Book 里的[《怎样用好子 Agent》](https://book.oiloil.org/articles/subagent-workflow?utm_source=github&utm_medium=referral&utm_campaign=oil-delegate-readme)。
 
@@ -101,7 +101,7 @@ npx skills add oil-oil/oil-delegate
 python3.10 -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-特定 Agent 的调用差异与失败处理见 [Runner 适配参考](references/runners.md)。发现问题时，可以带上 Runner、实际版本和错误日志到 [GitHub Issues](https://github.com/oil-oil/oil-delegate/issues) 反馈。
+特定 Agent 的调用差异与失败处理见 [Runner 适配参考](references/runners.md)。发现问题时，可以带上 Runner、实际版本和错误日志到 [GitHub Issues](https://github.com/DoThingsWithAI/oil-delegate/issues) 反馈。
 
 </details>
 

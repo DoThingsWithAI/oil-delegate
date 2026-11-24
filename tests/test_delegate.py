@@ -351,9 +351,12 @@ class DelegateTestCase(unittest.TestCase):
             ("cursor-cli", "cursor"),
         ):
             with self.subTest(alias=alias):
-                proc = self.run_task(alias, mode="write")
-                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-                self.assertEqual(self.result_of(proc)["runner"], canonical)
+                proc = self.run_task(alias, mode="read")
+                if canonical == "kimi":
+                    self.assertNotEqual(proc.returncode, 0)
+                else:
+                    self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+                    self.assertEqual(self.result_of(proc)["runner"], canonical)
 
         configured = self.run_cli("config", "--set-default-runner", "WB")
         self.assertEqual(configured.returncode, 0, msg=configured.stderr)
@@ -389,15 +392,8 @@ class DelegateTestCase(unittest.TestCase):
             "cursor": ["--mode", "plan"],
         }
         expected_write = {
-            "claude": ["--dangerously-skip-permissions"],
-            "workbuddy": ["--permission-mode", "bypassPermissions"],
-            "antigravity": ["--dangerously-skip-permissions"],
-            "codex": ["--dangerously-bypass-approvals-and-sandbox"],
-            "opencode": [],
-            "dsh": ["--permission-mode", "danger-full-access"],
-            "grok": ["--always-approve"],
-            "kimi": [],
-            "cursor": ["--force"],
+            "codex": ["--sandbox", "workspace-write"],
+            "dsh": ["--permission-mode", "workspace-write"],
         }
         resume_flags = {
             "claude": "--resume",
@@ -433,7 +429,7 @@ class DelegateTestCase(unittest.TestCase):
                     if runner in ("codex", "dsh"):
                         self.assertEqual(result["command"][-1], "-")
                     elif runner == "cursor":
-                        self.assertIn("--trust", record["argv"])
+                        self.assertNotIn("--trust", record["argv"])
                         self.assertNotIn("--force", record["argv"])
                         self.assertIn("inspect the fixture", record["stdin"])
                     else:
@@ -447,48 +443,31 @@ class DelegateTestCase(unittest.TestCase):
                         self.assertEqual(record["disable_background"], "1")
 
             with self.subTest(runner=runner, mode="write"):
-                record_path = self.root / "record.json"
-                proc = self.run_task(runner, mode="write", extra_env={"FAKE_RECORD": str(record_path)})
-                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-                write_result = self.result_of(proc)
-                record = self.record_of()
-                if expected_write[runner]:
+                proc = self.run_task(runner, mode="write", extra_env={"FAKE_RECORD": str(self.root / "record.json")})
+                if runner in expected_write:
+                    self.assertEqual(proc.returncode, 0, msg=proc.stderr)
                     flags = expected_write[runner]
-                    self.assertIn(flags, [record["argv"][i:i + len(flags)] for i in range(len(record["argv"]))])
-                if runner == "opencode":
-                    self.assertEqual(json.loads(record["permission"])["edit"], "allow")
-                    self.assertEqual(json.loads(record["permission"])["bash"], "allow")
-                    self.assertEqual(json.loads(record["permission"])["external_directory"], "allow")
-                if runner == "dsh":
-                    self.assertIn("--approval-policy", record["argv"])
-                    self.assertIn("never", record["argv"])
-                if runner == "workbuddy":
-                    self.assertEqual(record["codebuddy_sandbox"], "1")
-                if runner == "kimi":
-                    self.assertNotIn("--auto", record["argv"])
-                    self.assertIn("stream-json", record["argv"])
-                if runner == "cursor":
-                    self.assertIn("--trust", record["argv"])
-                    self.assertIn("inspect the fixture", record["stdin"])
+                    argv = self.record_of()["argv"]
+                    self.assertIn(flags, [argv[i:i + len(flags)] for i in range(len(argv))])
+                else:
+                    self.assertEqual(proc.returncode, 1)
+                    self.assertIn("no verified workspace-write adapter", proc.stderr)
 
+            if runner == "kimi":
+                continue
             with self.subTest(runner=runner, mode="resume"):
-                record_path = self.root / "record.json"
                 proc = self.run_task(
-                    runner,
-                    mode="write" if runner == "kimi" else "read",
-                    session=write_result["session_id"],
-                    extra_env={"FAKE_RECORD": str(record_path)},
+                    runner, session=f"fake-{runner}-session",
+                    extra_env={"FAKE_RECORD": str(self.root / "record.json")},
                 )
                 self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-                resumed = self.result_of(proc)
-                record = self.record_of()
-                self.assertEqual(resumed["session_id"], write_result["session_id"])
-                self.assertIn(resume_flags[runner], record["argv"])
+                self.assertEqual(self.result_of(proc)["session_id"], f"fake-{runner}-session")
+                self.assertIn(resume_flags[runner], self.record_of()["argv"])
                 if runner == "codex":
-                    self.assertIn('sandbox_mode="read-only"', record["argv"])
+                    self.assertIn('sandbox_mode="read-only"', self.record_of()["argv"])
 
-    def test_default_mode_is_full_access(self) -> None:
-        # The parser leaves --mode empty so a role can supply its own mode; a plain run still writes.
+    def test_default_mode_is_read_only(self) -> None:
+        # The parser leaves --mode empty so a role can supply its own mode; plain runs read.
         args = DELEGATE.build_parser().parse_args(["run", "--prompt", "inspect"])
         self.assertIsNone(args.mode)
 
@@ -505,9 +484,10 @@ class DelegateTestCase(unittest.TestCase):
             extra_env={"FAKE_RECORD": str(record_path)},
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertEqual(self.result_of(proc)["mode"], "write")
+        self.assertEqual(self.result_of(proc)["mode"], "read")
         record = self.record_of()
-        self.assertIn("--always-approve", record["argv"])
+        self.assertIn("plan", record["argv"])
+        self.assertNotIn("--always-approve", record["argv"])
 
     def run_role(self, role: str, *extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return self.run_cli(
@@ -531,7 +511,7 @@ class DelegateTestCase(unittest.TestCase):
         self.assertEqual(payload["mode"], "read")
         self.assertEqual(payload["candidates"][0], "host")
         self.assertNotIn("kimi", payload["candidates"])
-        self.assertIn("kimi", json.loads(self.run_role("implement", "--dry-run").stdout)["candidates"])
+        self.assertNotIn("kimi", json.loads(self.run_role("implement", "--dry-run").stdout)["candidates"])
 
         rejected = self.run_cli("config", "--set-role", "review=kimi")
         self.assertEqual(rejected.returncode, 1)
@@ -593,7 +573,7 @@ class DelegateTestCase(unittest.TestCase):
 
     def test_dsh_legacy_permission_flags_use_environment(self) -> None:
         self.onboard_all()
-        for mode, expected in (("read", "read-only"), ("write", "danger-full-access")):
+        for mode, expected in (("read", "read-only"), ("write", "workspace-write")):
             with self.subTest(mode=mode):
                 record_path = self.root / "record.json"
                 proc = self.run_task(
@@ -601,17 +581,19 @@ class DelegateTestCase(unittest.TestCase):
                     mode=mode,
                     extra_env={"FAKE_RECORD": str(record_path), "FAKE_DSH_LEGACY": "1"},
                 )
+                if mode == "write":
+                    self.assertEqual(proc.returncode, 1)
+                    self.assertIn("requires an explicit", proc.stderr)
+                    continue
                 self.assertEqual(proc.returncode, 0, msg=proc.stderr)
                 record = self.record_of()
                 self.assertEqual(record["dsh_mode"], expected)
                 self.assertNotIn("--permission-mode", record["argv"])
 
-    def test_prompt_does_not_forbid_git_operations(self) -> None:
+    def test_prompt_forbids_publication_and_secret_access(self) -> None:
         prompt = DELEGATE.compose_prompt("inspect", self.workspace, "write", [])
-        self.assertNotIn("Do not run git add", prompt)
-        self.assertNotIn("git commit", prompt)
-        self.assertNotIn("git push", prompt)
-        self.assertNotIn("publish", prompt)
+        self.assertIn("Do not commit, push, deploy", prompt)
+        self.assertIn("access secrets", prompt)
         self.assertIn("Final report", prompt)
 
     def test_dry_run_has_no_process_or_run_artifacts(self) -> None:
@@ -671,7 +653,9 @@ class DelegateTestCase(unittest.TestCase):
             "cursor": "--resume fake-cursor-session",
         }
         for runner, command in expected.items():
-            mode = "write" if runner == "kimi" else "read"
+            if runner == "kimi":
+                continue
+            mode = "read"
             proc = self.run_cli(
                 "run", "--runner", runner, "--workspace", str(self.workspace), "--mode", mode,
                 "--prompt", "inspect", "--json",
@@ -800,15 +784,43 @@ class DelegateTestCase(unittest.TestCase):
         self.onboard_all()
         for runner in RUNNERS:
             with self.subTest(runner=runner):
+                if runner == "kimi":
+                    continue
                 proc = self.run_task(
                     runner,
-                    mode="write" if runner == "kimi" else "read",
+                    mode="read",
                     extra_env={"FAKE_EMPTY": "1"},
                 )
                 self.assertNotEqual(proc.returncode, 0)
                 result = self.result_of(proc)
                 self.assertEqual(result["status"], "failed")
                 self.assertTrue(result["error"])
+
+    def test_security_boundaries(self) -> None:
+        self.onboard_all()
+        outside = self.root / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        denied = self.run_cli("run", "--runner", "dsh", "--workspace", str(self.workspace),
+                              "--file", str(outside), "--prompt", "inspect", "--json")
+        self.assertEqual(denied.returncode, 1)
+        self.assertIn("outside workspace", denied.stdout)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "test-github-token",
+                                         "OPENAI_API_KEY": "test-openai-key",
+                                         "DEEPSEEK_API_KEY": "test-deepseek-key"}):
+            env = DELEGATE.child_environment("dsh")
+            self.assertNotIn("GITHUB_TOKEN", env)
+            self.assertNotIn("OPENAI_API_KEY", env)
+            self.assertEqual(env["DEEPSEEK_API_KEY"], "test-deepseek-key")
+            self.assertEqual(DELEGATE.redact_secrets("test-github-token"), "[REDACTED]")
+        proc = self.run_task("dsh")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        result = self.result_of(proc)
+        self.assertFalse((Path(result["result_path"]).parent / "prompt.txt").exists())
+        self.assertIn("raw logging disabled", Path(result["events_path"]).read_text())
+        self.assertIn("truncated", DELEGATE.bounded_report("a" * 13000))
+        if os.name == "posix":
+            self.assertEqual(Path(result["output_path"]).stat().st_mode & 0o777, 0o600)
+            self.assertEqual(Path(result["result_path"]).parent.stat().st_mode & 0o777, 0o700)
 
     def test_codex_failure_without_detail_is_not_success(self) -> None:
         self.onboard_all()

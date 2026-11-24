@@ -18,7 +18,7 @@ SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "delegate.py"
 SPEC = importlib.util.spec_from_file_location("delegate_under_test", SCRIPT_PATH)
 DELEGATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DELEGATE)
-RUNNERS = ("claude", "claude-volces", "workbuddy", "antigravity", "codex", "opencode", "dsh", "grok", "kimi", "cursor")
+RUNNERS = ("claude", "claude-volces", "claude-minimax", "workbuddy", "antigravity", "codex", "opencode", "dsh", "grok", "kimi", "cursor")
 
 FAKE_CLI = r'''#!{python}
 import json
@@ -32,7 +32,7 @@ if os.environ.get("FAKE_CALL_LOG"):
     with open(os.environ["FAKE_CALL_LOG"], "a", encoding="utf-8") as handle:
         handle.write(json.dumps({{"runner": runner, "argv": args}}) + "\n")
 if "--version" in args:
-    print(("2.1.313" if os.environ.get("FAKE_OLD_CLAUDE") else "2.1.314") + " (Claude Code)" if runner in ("claude", "claude-volces") else "fake-" + runner + "-1.0")
+    print(("2.1.313" if os.environ.get("FAKE_OLD_CLAUDE") else "2.1.314") + " (Claude Code)" if runner in ("claude", "claude-volces", "claude-minimax") else "fake-" + runner + "-1.0")
     raise SystemExit(0)
 if runner == "dsh" and "--help" in args:
     if os.environ.get("FAKE_DSH_LEGACY") == "1":
@@ -78,7 +78,7 @@ if os.environ.get("FAKE_CURSOR_BAD_SUBTYPE") == "1":
     raise SystemExit(0)
 
 if os.environ.get("FAKE_EMPTY") == "1":
-    if runner in ("claude", "claude-volces", "workbuddy", "cursor"):
+    if runner in ("claude", "claude-volces", "claude-minimax", "workbuddy", "cursor"):
         print(json.dumps({{"type": "result", "subtype": "success", "session_id": session, "result": "", "is_error": False}}))
     elif runner == "antigravity":
         print(json.dumps({{"conversation_id": session, "status": "SUCCESS", "response": ""}}))
@@ -102,7 +102,7 @@ if os.environ.get("FAKE_CODEX_FAIL_NO_DETAIL") == "1":
     print(json.dumps({{"type": "turn.failed"}}))
     raise SystemExit(0)
 
-if runner in ("claude", "claude-volces", "workbuddy", "cursor"):
+if runner in ("claude", "claude-volces", "claude-minimax", "workbuddy", "cursor"):
     print(json.dumps({{"type": "result", "subtype": "success", "session_id": session, "result": "fake response", "is_error": False}}))
 elif runner == "antigravity":
     print(json.dumps({{"conversation_id": session, "status": "SUCCESS", "response": "fake response"}}))
@@ -224,7 +224,7 @@ class DelegateTestCase(unittest.TestCase):
     def record_of(self) -> dict:
         return json.loads((self.root / "record.json").read_text(encoding="utf-8"))
 
-    def test_scan_is_read_only_and_reports_ten_runners(self) -> None:
+    def test_scan_is_read_only_and_reports_eleven_runners(self) -> None:
         result = self.run_cli("onboard", "--scan")
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         payload = json.loads(result.stdout)
@@ -384,6 +384,7 @@ class DelegateTestCase(unittest.TestCase):
         expected_read = {
             "claude": ["--permission-mode", "plan"],
             "claude-volces": ["--permission-mode", "plan"],
+            "claude-minimax": ["--permission-mode", "plan"],
             "workbuddy": ["--permission-mode", "plan"],
             "antigravity": ["--mode", "plan"],
             "codex": ["--sandbox", "read-only"],
@@ -395,12 +396,14 @@ class DelegateTestCase(unittest.TestCase):
         expected_write = {
             "claude": ["--permission-mode", "acceptEdits"],
             "claude-volces": ["--permission-mode", "acceptEdits"],
+            "claude-minimax": ["--permission-mode", "acceptEdits"],
             "codex": ["--sandbox", "workspace-write"],
             "dsh": ["--permission-mode", "workspace-write"],
         }
         resume_flags = {
             "claude": "--resume",
             "claude-volces": "--resume",
+            "claude-minimax": "--resume",
             "workbuddy": "--resume",
             "antigravity": "--conversation",
             "codex": "resume",
@@ -649,6 +652,7 @@ class DelegateTestCase(unittest.TestCase):
         expected = {
             "claude": "--resume fake-claude-session",
             "claude-volces": "--resume fake-claude-volces-session",
+            "claude-minimax": "--resume fake-claude-minimax-session",
             "antigravity": "--conversation fake-antigravity-session",
             "codex": "resume fake-codex-session",
             "opencode": "--session fake-opencode-session",
@@ -854,6 +858,30 @@ class DelegateTestCase(unittest.TestCase):
             env = DELEGATE.child_environment("claude-volces")
             self.assertEqual(env["ARK_API_KEY"], "ark-test-key")
             self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "volces-token")
+            self.assertNotIn("GITHUB_TOKEN", env)
+
+    def test_minimax_uses_separate_launcher_and_never_falls_back(self) -> None:
+        self.onboard_all()
+        record_path = self.root / "record.json"
+        proc = self.run_task("minimax", mode="write", extra_env={"FAKE_RECORD": str(record_path)})
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(self.result_of(proc)["runner"], "claude-minimax")
+        self.assertEqual(self.record_of()["runner"], "claude-minimax")
+        self.assertNotIn("--model", self.record_of()["argv"])
+        with mock.patch.dict(os.environ, {"PATH": str(self.bin_dir),
+                                         "ANTHROPIC_AUTH_TOKEN": "minimax-token",
+                                         "MINIMAX_API_KEY": "minimax-test-key",
+                                         "ARK_API_KEY": "ark-test-key",
+                                         "GITHUB_TOKEN": "github-test-key"}, clear=True):
+            with mock.patch.object(Path, "home", return_value=self.root / "empty-home"):
+                (self.bin_dir / "claude-minimax").unlink()
+                info = DELEGATE.detect_binary("claude-minimax", DELEGATE.default_config())
+                self.assertFalse(info["installed"])
+                self.assertIn("claude-minimax", info["error"])
+            env = DELEGATE.child_environment("claude-minimax")
+            self.assertEqual(env["MINIMAX_API_KEY"], "minimax-test-key")
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "minimax-token")
+            self.assertNotIn("ARK_API_KEY", env)
             self.assertNotIn("GITHUB_TOKEN", env)
 
     def test_security_boundaries(self) -> None:

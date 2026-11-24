@@ -25,6 +25,7 @@ SCHEMA_VERSION = 1
 SUPPORTED_RUNNERS = (
     "claude",
     "claude-volces",
+    "claude-minimax",
     "workbuddy",
     "antigravity",
     "codex",
@@ -37,6 +38,7 @@ SUPPORTED_RUNNERS = (
 RUNNER_LABELS = {
     "claude": "Claude Code (claude/cc)",
     "claude-volces": "Claude Code (Volcengine GLM profile)",
+    "claude-minimax": "Claude Code (MiniMax profile)",
     "workbuddy": "WorkBuddy (codebuddy/cbc/wb)",
     "antigravity": "Antigravity (agy/anti)",
     "codex": "Codex (codex)",
@@ -49,6 +51,7 @@ RUNNER_LABELS = {
 RUNNER_BINARIES = {
     "claude": ("claude",),
     "claude-volces": ("claude-volces",),
+    "claude-minimax": ("claude-minimax",),
     "workbuddy": ("codebuddy", "cbc"),
     "antigravity": ("agy",),
     "codex": ("codex",),
@@ -64,6 +67,7 @@ RUNNER_ALIASES = {
     "volces": "claude-volces",
     "glm5.3": "claude-volces",
     "glm-5.3": "claude-volces",
+    "minimax": "claude-minimax",
     "wb": "workbuddy",
     "codebuddy": "workbuddy",
     "cbc": "workbuddy",
@@ -82,6 +86,7 @@ CONTRACT_VERSION = 1
 RESUME_TEMPLATES = {
     "claude": ("{bin}", "--resume", "{sid}"),
     "claude-volces": ("{bin}", "--resume", "{sid}"),
+    "claude-minimax": ("{bin}", "--resume", "{sid}"),
     "workbuddy": ("{bin}", "--resume", "{sid}"),
     "antigravity": ("{bin}", "--conversation", "{sid}"),
     "codex": ("{bin}", "resume", "{sid}"),
@@ -112,7 +117,7 @@ ROLE_DESCRIPTIONS = {
 ROLE_SLOTS = {"diagnose": 2}
 HOST_AGENT = "host"
 READ_ONLY_UNSUPPORTED = {"kimi"}
-WRITE_SUPPORTED = {"codex", "dsh", "claude", "claude-volces"}
+WRITE_SUPPORTED = {"codex", "dsh", "claude", "claude-volces", "claude-minimax"}
 CLAUDE_MIN_VERSION = (2, 1, 314)
 DEFAULT_RUN_TIMEOUT = 900
 MAX_RUN_TIMEOUT = 3600
@@ -122,6 +127,7 @@ MAX_REPORT_CHARS = 12000
 RUNNER_SECRET_ENV = {
     "claude": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
     "claude-volces": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ARK_API_KEY"},
+    "claude-minimax": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MINIMAX_API_KEY"},
     "dsh": {"DEEPSEEK_API_KEY", "DSH_API_KEY"},
     "codex": {"OPENAI_API_KEY", "CODEX_API_KEY"},
     "grok": {"XAI_API_KEY"},
@@ -509,7 +515,7 @@ def apply_role(config: dict[str, Any], assignment: str) -> list[str]:
                 f"Role '{role}' runs read-only, which {', '.join(blocked)} cannot guarantee; choose another runner or host"
             )
     if ROLE_MODES[role] == "write" and any(r not in WRITE_SUPPORTED for r in runners):
-        raise DelegateError("Implement role requires codex, dsh, claude/claude-volces (restricted editing), or host")
+        raise DelegateError("Implement role requires codex, dsh, claude/claude-volces/claude-minimax (restricted editing), or host")
     validate_installed(runners, config)
     if runners:
         enabled = list(config.get("enabled_runners", []))
@@ -726,11 +732,11 @@ def build_invocation(
     dsh_capabilities: dict[str, Any] | None,
 ) -> tuple[list[str], str | None, dict[str, str]]:
     if mode == "write" and runner not in WRITE_SUPPORTED:
-        raise DelegateError(f"{runner} has no verified workspace-write adapter; choose codex, dsh, claude or claude-volces")
+        raise DelegateError(f"{runner} has no verified workspace-write adapter; choose codex, dsh, claude, claude-volces or claude-minimax")
     env: dict[str, str] = {}
     stdin_input: str | None = None
 
-    if runner in ("claude", "claude-volces"):
+    if runner in ("claude", "claude-volces", "claude-minimax"):
         cmd = [binary]
         if session_id:
             cmd.extend(["--resume", session_id])
@@ -955,7 +961,7 @@ def parse_runner_output(
     error: str | None = None
     protocol_ok = True
 
-    if runner in ("claude", "claude-volces", "workbuddy", "antigravity", "cursor"):
+    if runner in ("claude", "claude-volces", "claude-minimax", "workbuddy", "antigravity", "cursor"):
         obj = json_object(raw_out)
         if not obj:
             protocol_ok = False
@@ -1134,7 +1140,7 @@ def execute_run(
     binary_info = detect_binary(runner, config)
     if not binary_info["installed"]:
         raise DelegateError(binary_info["error"] or f"Runner not installed: {runner}")
-    if runner in ("claude", "claude-volces"):
+    if runner in ("claude", "claude-volces", "claude-minimax"):
         version = probe_version(binary_info["path"])
         match = re.match(r"^(\d+)\.(\d+)\.(\d+)\b", version.get("version") or "")
         if version.get("probe_error") or not match or tuple(map(int, match.groups())) < CLAUDE_MIN_VERSION:

@@ -18,7 +18,7 @@
 
 ## 共同约束
 
-正式 Runner 名为 `claude`、`claude-volces`、`workbuddy`、`antigravity`、`codex`、`opencode`、`dsh`、`grok`、`kimi`、`cursor`。别名包括 `cc/claude-code`、`wb/codebuddy/cbc`、`agy/anti`、`deepseek/deepseek-harness`、`grok-build`、`kimi-code`、`cursor-agent/cursor-cli`。名称不区分大小写；启用、默认 Runner、单次委托和二进制路径配置都使用同一套别名解析，保存时统一转为正式 Runner 名。
+正式 Runner 名为 `claude`、`claude-volces`、`claude-minimax`、`workbuddy`、`antigravity`、`codex`、`opencode`、`dsh`、`grok`、`kimi`、`cursor`。别名包括 `cc/claude-code`、`wb/codebuddy/cbc`、`agy/anti`、`deepseek/deepseek-harness`、`grok-build`、`kimi-code`、`cursor-agent/cursor-cli`。名称不区分大小写；启用、默认 Runner、单次委托和二进制路径配置都使用同一套别名解析，保存时统一转为正式 Runner 名。
 
 优先级：环境变量 `OIL_DELEGATE_<RUNNER>_BIN` → 配置中的 runner path → PATH → 已知安装目录。所有调用使用 argv 数组，prompt 不经过 shell。常规调用不指定模型、provider 或思考强度。
 
@@ -28,11 +28,11 @@ CLI 的 plan 和权限配置不等于 OS 级隔离。调用方必须确保仓库
 
 ## Claude Code
 
-- 发现：`claude`。火山方舟专用 runner 为 `claude-volces`，只查找该命令，支持 `OIL_DELEGATE_CLAUDE_VOLCES_BIN` 或 `config --set-bin claude-volces=/absolute/path`；不回退普通 `claude`。别名为 `volces`、`glm5.3`、`glm-5.3`。如果该名称只是 zsh alias/function，需要用户提供可信的可执行 wrapper，转发所有参数；不自动执行交互 shell 配置。
+- 发现：`claude`。火山方舟专用 runner 为 `claude-volces`，只查找该命令，支持 `OIL_DELEGATE_CLAUDE_VOLCES_BIN` 或 `config --set-bin claude-volces=/absolute/path`；不回退普通 `claude`。别名为 `volces`、`glm5.3`、`glm-5.3`。MiniMax 专用 runner 为 `claude-minimax`（别名 `minimax`），只查找同名命令，支持 `OIL_DELEGATE_CLAUDE_MINIMAX_BIN` 或 `config --set-bin claude-minimax=/absolute/path`，不回退普通 Claude 或 GLM。若这些名称只是 zsh alias/function，需要用户提供可信的可执行 wrapper，转发所有参数；不自动执行交互 shell 配置。
 - 新建：`claude -p <prompt> --output-format json`；续接增加 `--resume <session_id>`。
 - 要求 Claude Code 2.1.314+，旧版拒绝运行，不自动降级。
 - read：plan，仅 Read/Glob/Grep；write：acceptEdits，仅增加 Edit/Write。两种模式均禁用自定义插件/钩子、MCP 和 Bash/Web 工具，设置工作目录外读写限制，未经批准的工具请求拒绝。使用本机 Worktree 入口做写入；主 Agent 检查 diff 并执行测试。
-- 沿用 user 级配置或进程环境中的 provider/model/认证（例如 ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN、ANTHROPIC_MODEL；claude-volces 也保留 ARK_API_KEY）。不加 --model，不改配置文件，不复制密钥；如果 GLM 只通过交互 shell alias 或项目配置生效，需改用用户配置或已确认的可信启动脚本。实际计费取决于本机生效配置。
+- 沿用 user 级配置或进程环境中的 provider/model/认证（例如 ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN、ANTHROPIC_MODEL；claude-volces 也保留 ARK_API_KEY，claude-minimax 也保留 MINIMAX_API_KEY）。不加 --model，不改配置文件，不复制密钥；如果 GLM 只通过交互 shell alias 或项目配置生效，需改用用户配置或已确认的可信启动脚本。实际计费取决于本机生效配置。
 - 这是 CLI 文件工具权限，不是整个进程的 OS 沙箱。仅适用于可信仓库和可信本机配置。
 - 解析：最终 JSON 的 `session_id`、`result`、`is_error`。
 - 认证：先用官方交互式 CLI 完成安装与登录；不要在包装器中输入或转存密钥。

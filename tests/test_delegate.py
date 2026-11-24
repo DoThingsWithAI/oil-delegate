@@ -18,7 +18,7 @@ SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "delegate.py"
 SPEC = importlib.util.spec_from_file_location("delegate_under_test", SCRIPT_PATH)
 DELEGATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(DELEGATE)
-RUNNERS = ("claude", "workbuddy", "antigravity", "codex", "opencode", "dsh", "grok", "kimi", "cursor")
+RUNNERS = ("claude", "claude-volces", "claude-minimax", "workbuddy", "antigravity", "codex", "opencode", "dsh", "grok", "kimi", "cursor")
 
 FAKE_CLI = r'''#!{python}
 import json
@@ -32,7 +32,7 @@ if os.environ.get("FAKE_CALL_LOG"):
     with open(os.environ["FAKE_CALL_LOG"], "a", encoding="utf-8") as handle:
         handle.write(json.dumps({{"runner": runner, "argv": args}}) + "\n")
 if "--version" in args:
-    print("fake-" + runner + "-1.0")
+    print(("2.1.313" if os.environ.get("FAKE_OLD_CLAUDE") else "2.1.314") + " (Claude Code)" if runner in ("claude", "claude-volces", "claude-minimax") else "fake-" + runner + "-1.0")
     raise SystemExit(0)
 if runner == "dsh" and "--help" in args:
     if os.environ.get("FAKE_DSH_LEGACY") == "1":
@@ -78,7 +78,7 @@ if os.environ.get("FAKE_CURSOR_BAD_SUBTYPE") == "1":
     raise SystemExit(0)
 
 if os.environ.get("FAKE_EMPTY") == "1":
-    if runner in ("claude", "workbuddy", "cursor"):
+    if runner in ("claude", "claude-volces", "claude-minimax", "workbuddy", "cursor"):
         print(json.dumps({{"type": "result", "subtype": "success", "session_id": session, "result": "", "is_error": False}}))
     elif runner == "antigravity":
         print(json.dumps({{"conversation_id": session, "status": "SUCCESS", "response": ""}}))
@@ -102,7 +102,7 @@ if os.environ.get("FAKE_CODEX_FAIL_NO_DETAIL") == "1":
     print(json.dumps({{"type": "turn.failed"}}))
     raise SystemExit(0)
 
-if runner in ("claude", "workbuddy", "cursor"):
+if runner in ("claude", "claude-volces", "claude-minimax", "workbuddy", "cursor"):
     print(json.dumps({{"type": "result", "subtype": "success", "session_id": session, "result": "fake response", "is_error": False}}))
 elif runner == "antigravity":
     print(json.dumps({{"conversation_id": session, "status": "SUCCESS", "response": "fake response"}}))
@@ -156,7 +156,7 @@ class DelegateTestCase(unittest.TestCase):
             if key.startswith("FAKE_"):
                 env.pop(key, None)
         for runner, path in self.binaries.items():
-            env[f"OIL_DELEGATE_{runner.upper()}_BIN"] = str(path)
+            env["OIL_DELEGATE_" + runner.upper().replace("-", "_") + "_BIN"] = str(path)
         return env
 
     def run_cli(
@@ -224,7 +224,7 @@ class DelegateTestCase(unittest.TestCase):
     def record_of(self) -> dict:
         return json.loads((self.root / "record.json").read_text(encoding="utf-8"))
 
-    def test_scan_is_read_only_and_reports_nine_runners(self) -> None:
+    def test_scan_is_read_only_and_reports_eleven_runners(self) -> None:
         result = self.run_cli("onboard", "--scan")
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         payload = json.loads(result.stdout)
@@ -351,9 +351,12 @@ class DelegateTestCase(unittest.TestCase):
             ("cursor-cli", "cursor"),
         ):
             with self.subTest(alias=alias):
-                proc = self.run_task(alias, mode="write")
-                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-                self.assertEqual(self.result_of(proc)["runner"], canonical)
+                proc = self.run_task(alias, mode="read")
+                if canonical == "kimi":
+                    self.assertNotEqual(proc.returncode, 0)
+                else:
+                    self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+                    self.assertEqual(self.result_of(proc)["runner"], canonical)
 
         configured = self.run_cli("config", "--set-default-runner", "WB")
         self.assertEqual(configured.returncode, 0, msg=configured.stderr)
@@ -380,6 +383,8 @@ class DelegateTestCase(unittest.TestCase):
         self.onboard_all()
         expected_read = {
             "claude": ["--permission-mode", "plan"],
+            "claude-volces": ["--permission-mode", "plan"],
+            "claude-minimax": ["--permission-mode", "plan"],
             "workbuddy": ["--permission-mode", "plan"],
             "antigravity": ["--mode", "plan"],
             "codex": ["--sandbox", "read-only"],
@@ -389,18 +394,16 @@ class DelegateTestCase(unittest.TestCase):
             "cursor": ["--mode", "plan"],
         }
         expected_write = {
-            "claude": ["--dangerously-skip-permissions"],
-            "workbuddy": ["--permission-mode", "bypassPermissions"],
-            "antigravity": ["--dangerously-skip-permissions"],
-            "codex": ["--dangerously-bypass-approvals-and-sandbox"],
-            "opencode": [],
-            "dsh": ["--permission-mode", "danger-full-access"],
-            "grok": ["--always-approve"],
-            "kimi": [],
-            "cursor": ["--force"],
+            "claude": ["--permission-mode", "acceptEdits"],
+            "claude-volces": ["--permission-mode", "acceptEdits"],
+            "claude-minimax": ["--permission-mode", "acceptEdits"],
+            "codex": ["--sandbox", "workspace-write"],
+            "dsh": ["--permission-mode", "workspace-write"],
         }
         resume_flags = {
             "claude": "--resume",
+            "claude-volces": "--resume",
+            "claude-minimax": "--resume",
             "workbuddy": "--resume",
             "antigravity": "--conversation",
             "codex": "resume",
@@ -433,7 +436,7 @@ class DelegateTestCase(unittest.TestCase):
                     if runner in ("codex", "dsh"):
                         self.assertEqual(result["command"][-1], "-")
                     elif runner == "cursor":
-                        self.assertIn("--trust", record["argv"])
+                        self.assertNotIn("--trust", record["argv"])
                         self.assertNotIn("--force", record["argv"])
                         self.assertIn("inspect the fixture", record["stdin"])
                     else:
@@ -447,48 +450,31 @@ class DelegateTestCase(unittest.TestCase):
                         self.assertEqual(record["disable_background"], "1")
 
             with self.subTest(runner=runner, mode="write"):
-                record_path = self.root / "record.json"
-                proc = self.run_task(runner, mode="write", extra_env={"FAKE_RECORD": str(record_path)})
-                self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-                write_result = self.result_of(proc)
-                record = self.record_of()
-                if expected_write[runner]:
+                proc = self.run_task(runner, mode="write", extra_env={"FAKE_RECORD": str(self.root / "record.json")})
+                if runner in expected_write:
+                    self.assertEqual(proc.returncode, 0, msg=proc.stderr)
                     flags = expected_write[runner]
-                    self.assertIn(flags, [record["argv"][i:i + len(flags)] for i in range(len(record["argv"]))])
-                if runner == "opencode":
-                    self.assertEqual(json.loads(record["permission"])["edit"], "allow")
-                    self.assertEqual(json.loads(record["permission"])["bash"], "allow")
-                    self.assertEqual(json.loads(record["permission"])["external_directory"], "allow")
-                if runner == "dsh":
-                    self.assertIn("--approval-policy", record["argv"])
-                    self.assertIn("never", record["argv"])
-                if runner == "workbuddy":
-                    self.assertEqual(record["codebuddy_sandbox"], "1")
-                if runner == "kimi":
-                    self.assertNotIn("--auto", record["argv"])
-                    self.assertIn("stream-json", record["argv"])
-                if runner == "cursor":
-                    self.assertIn("--trust", record["argv"])
-                    self.assertIn("inspect the fixture", record["stdin"])
+                    argv = self.record_of()["argv"]
+                    self.assertIn(flags, [argv[i:i + len(flags)] for i in range(len(argv))])
+                else:
+                    self.assertEqual(proc.returncode, 1)
+                    self.assertIn("no verified workspace-write adapter", proc.stderr)
 
+            if runner == "kimi":
+                continue
             with self.subTest(runner=runner, mode="resume"):
-                record_path = self.root / "record.json"
                 proc = self.run_task(
-                    runner,
-                    mode="write" if runner == "kimi" else "read",
-                    session=write_result["session_id"],
-                    extra_env={"FAKE_RECORD": str(record_path)},
+                    runner, session=f"fake-{runner}-session",
+                    extra_env={"FAKE_RECORD": str(self.root / "record.json")},
                 )
                 self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-                resumed = self.result_of(proc)
-                record = self.record_of()
-                self.assertEqual(resumed["session_id"], write_result["session_id"])
-                self.assertIn(resume_flags[runner], record["argv"])
+                self.assertEqual(self.result_of(proc)["session_id"], f"fake-{runner}-session")
+                self.assertIn(resume_flags[runner], self.record_of()["argv"])
                 if runner == "codex":
-                    self.assertIn('sandbox_mode="read-only"', record["argv"])
+                    self.assertIn('sandbox_mode="read-only"', self.record_of()["argv"])
 
-    def test_default_mode_is_full_access(self) -> None:
-        # The parser leaves --mode empty so a role can supply its own mode; a plain run still writes.
+    def test_default_mode_is_read_only(self) -> None:
+        # The parser leaves --mode empty so a role can supply its own mode; plain runs read.
         args = DELEGATE.build_parser().parse_args(["run", "--prompt", "inspect"])
         self.assertIsNone(args.mode)
 
@@ -505,9 +491,10 @@ class DelegateTestCase(unittest.TestCase):
             extra_env={"FAKE_RECORD": str(record_path)},
         )
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
-        self.assertEqual(self.result_of(proc)["mode"], "write")
+        self.assertEqual(self.result_of(proc)["mode"], "read")
         record = self.record_of()
-        self.assertIn("--always-approve", record["argv"])
+        self.assertIn("plan", record["argv"])
+        self.assertNotIn("--always-approve", record["argv"])
 
     def run_role(self, role: str, *extra: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return self.run_cli(
@@ -531,7 +518,7 @@ class DelegateTestCase(unittest.TestCase):
         self.assertEqual(payload["mode"], "read")
         self.assertEqual(payload["candidates"][0], "host")
         self.assertNotIn("kimi", payload["candidates"])
-        self.assertIn("kimi", json.loads(self.run_role("implement", "--dry-run").stdout)["candidates"])
+        self.assertNotIn("kimi", json.loads(self.run_role("implement", "--dry-run").stdout)["candidates"])
 
         rejected = self.run_cli("config", "--set-role", "review=kimi")
         self.assertEqual(rejected.returncode, 1)
@@ -593,7 +580,7 @@ class DelegateTestCase(unittest.TestCase):
 
     def test_dsh_legacy_permission_flags_use_environment(self) -> None:
         self.onboard_all()
-        for mode, expected in (("read", "read-only"), ("write", "danger-full-access")):
+        for mode, expected in (("read", "read-only"), ("write", "workspace-write")):
             with self.subTest(mode=mode):
                 record_path = self.root / "record.json"
                 proc = self.run_task(
@@ -601,17 +588,19 @@ class DelegateTestCase(unittest.TestCase):
                     mode=mode,
                     extra_env={"FAKE_RECORD": str(record_path), "FAKE_DSH_LEGACY": "1"},
                 )
+                if mode == "write":
+                    self.assertEqual(proc.returncode, 1)
+                    self.assertIn("requires an explicit", proc.stderr)
+                    continue
                 self.assertEqual(proc.returncode, 0, msg=proc.stderr)
                 record = self.record_of()
                 self.assertEqual(record["dsh_mode"], expected)
                 self.assertNotIn("--permission-mode", record["argv"])
 
-    def test_prompt_does_not_forbid_git_operations(self) -> None:
+    def test_prompt_forbids_publication_and_secret_access(self) -> None:
         prompt = DELEGATE.compose_prompt("inspect", self.workspace, "write", [])
-        self.assertNotIn("Do not run git add", prompt)
-        self.assertNotIn("git commit", prompt)
-        self.assertNotIn("git push", prompt)
-        self.assertNotIn("publish", prompt)
+        self.assertIn("Do not commit, push, deploy", prompt)
+        self.assertIn("access secrets", prompt)
         self.assertIn("Final report", prompt)
 
     def test_dry_run_has_no_process_or_run_artifacts(self) -> None:
@@ -662,6 +651,8 @@ class DelegateTestCase(unittest.TestCase):
         # Fake CLIs live at custom paths, so only the arguments after the executable are compared.
         expected = {
             "claude": "--resume fake-claude-session",
+            "claude-volces": "--resume fake-claude-volces-session",
+            "claude-minimax": "--resume fake-claude-minimax-session",
             "antigravity": "--conversation fake-antigravity-session",
             "codex": "resume fake-codex-session",
             "opencode": "--session fake-opencode-session",
@@ -671,7 +662,9 @@ class DelegateTestCase(unittest.TestCase):
             "cursor": "--resume fake-cursor-session",
         }
         for runner, command in expected.items():
-            mode = "write" if runner == "kimi" else "read"
+            if runner == "kimi":
+                continue
+            mode = "read"
             proc = self.run_cli(
                 "run", "--runner", runner, "--workspace", str(self.workspace), "--mode", mode,
                 "--prompt", "inspect", "--json",
@@ -800,15 +793,122 @@ class DelegateTestCase(unittest.TestCase):
         self.onboard_all()
         for runner in RUNNERS:
             with self.subTest(runner=runner):
+                if runner == "kimi":
+                    continue
                 proc = self.run_task(
                     runner,
-                    mode="write" if runner == "kimi" else "read",
+                    mode="read",
                     extra_env={"FAKE_EMPTY": "1"},
                 )
                 self.assertNotEqual(proc.returncode, 0)
                 result = self.result_of(proc)
                 self.assertEqual(result["status"], "failed")
                 self.assertTrue(result["error"])
+
+    def test_claude_glm_provider_is_inherited_and_tools_are_restricted(self) -> None:
+        self.onboard_all()
+        record_path = self.root / "record.json"
+        for mode in ("read", "write"):
+            proc = self.run_task("claude", mode=mode, extra_env={"FAKE_RECORD": str(record_path)})
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            argv = self.record_of()["argv"]
+            self.assertIn("--safe-mode", argv)
+            self.assertIn("--strict-mcp-config", argv)
+            self.assertNotIn("--dangerously-skip-permissions", argv)
+            self.assertNotIn("--model", argv)
+            tools = argv[argv.index("--tools") + 1].split(",")
+            self.assertNotIn("Bash", tools)
+            self.assertEqual("Edit" in tools, mode == "write")
+            self.assertEqual("Write" in tools, mode == "write")
+            settings = json.loads(argv[argv.index("--settings") + 1])
+            self.assertTrue(settings["permissions"]["blockReadsOutsideWorkingDirectories"])
+            self.assertTrue(settings["permissions"]["blockWritesOutsideWorkingDirectories"])
+        with mock.patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "glm-test-token",
+                                         "ANTHROPIC_BASE_URL": "https://example.invalid/api/anthropic",
+                                         "ANTHROPIC_MODEL": "glm-5.3",
+                                         "GITHUB_TOKEN": "test-github-token"}):
+            env = DELEGATE.child_environment("claude")
+            self.assertEqual(env["ANTHROPIC_MODEL"], "glm-5.3")
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "glm-test-token")
+            self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://example.invalid/api/anthropic")
+            self.assertNotIn("GITHUB_TOKEN", env)
+        old = self.run_task("claude", mode="write", extra_env={"FAKE_OLD_CLAUDE": "1"})
+        self.assertEqual(old.returncode, 1)
+        self.assertIn("2.1.314", old.stderr)
+        saved = self.run_cli("config", "--set-role", "implement=cc")
+        self.assertEqual(saved.returncode, 0, msg=saved.stderr)
+
+    def test_volces_uses_separate_launcher_and_never_falls_back(self) -> None:
+        self.onboard_all()
+        record_path = self.root / "record.json"
+        proc = self.run_task("glm-5.3", mode="write", extra_env={"FAKE_RECORD": str(record_path)})
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(self.result_of(proc)["runner"], "claude-volces")
+        self.assertEqual(self.record_of()["runner"], "claude-volces")
+        self.assertNotIn("--model", self.record_of()["argv"])
+        with mock.patch.dict(os.environ, {"PATH": str(self.bin_dir),
+                                         "ANTHROPIC_AUTH_TOKEN": "volces-token",
+                                         "ARK_API_KEY": "ark-test-key",
+                                         "GITHUB_TOKEN": "github-test-key"}, clear=True):
+            with mock.patch.object(Path, "home", return_value=self.root / "empty-home"):
+                (self.bin_dir / "claude-volces").unlink()
+                info = DELEGATE.detect_binary("claude-volces", DELEGATE.default_config())
+                self.assertFalse(info["installed"])
+                self.assertIn("claude-volces", info["error"])
+            env = DELEGATE.child_environment("claude-volces")
+            self.assertEqual(env["ARK_API_KEY"], "ark-test-key")
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "volces-token")
+            self.assertNotIn("GITHUB_TOKEN", env)
+
+    def test_minimax_uses_separate_launcher_and_never_falls_back(self) -> None:
+        self.onboard_all()
+        record_path = self.root / "record.json"
+        proc = self.run_task("minimax", mode="write", extra_env={"FAKE_RECORD": str(record_path)})
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        self.assertEqual(self.result_of(proc)["runner"], "claude-minimax")
+        self.assertEqual(self.record_of()["runner"], "claude-minimax")
+        self.assertNotIn("--model", self.record_of()["argv"])
+        with mock.patch.dict(os.environ, {"PATH": str(self.bin_dir),
+                                         "ANTHROPIC_AUTH_TOKEN": "minimax-token",
+                                         "MINIMAX_API_KEY": "minimax-test-key",
+                                         "ARK_API_KEY": "ark-test-key",
+                                         "GITHUB_TOKEN": "github-test-key"}, clear=True):
+            with mock.patch.object(Path, "home", return_value=self.root / "empty-home"):
+                (self.bin_dir / "claude-minimax").unlink()
+                info = DELEGATE.detect_binary("claude-minimax", DELEGATE.default_config())
+                self.assertFalse(info["installed"])
+                self.assertIn("claude-minimax", info["error"])
+            env = DELEGATE.child_environment("claude-minimax")
+            self.assertEqual(env["MINIMAX_API_KEY"], "minimax-test-key")
+            self.assertEqual(env["ANTHROPIC_AUTH_TOKEN"], "minimax-token")
+            self.assertNotIn("ARK_API_KEY", env)
+            self.assertNotIn("GITHUB_TOKEN", env)
+
+    def test_security_boundaries(self) -> None:
+        self.onboard_all()
+        outside = self.root / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        denied = self.run_cli("run", "--runner", "dsh", "--workspace", str(self.workspace),
+                              "--file", str(outside), "--prompt", "inspect", "--json")
+        self.assertEqual(denied.returncode, 1)
+        self.assertIn("outside workspace", denied.stdout)
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "test-github-token",
+                                         "OPENAI_API_KEY": "test-openai-key",
+                                         "DEEPSEEK_API_KEY": "test-deepseek-key"}):
+            env = DELEGATE.child_environment("dsh")
+            self.assertNotIn("GITHUB_TOKEN", env)
+            self.assertNotIn("OPENAI_API_KEY", env)
+            self.assertEqual(env["DEEPSEEK_API_KEY"], "test-deepseek-key")
+            self.assertEqual(DELEGATE.redact_secrets("test-github-token"), "[REDACTED]")
+        proc = self.run_task("dsh")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        result = self.result_of(proc)
+        self.assertFalse((Path(result["result_path"]).parent / "prompt.txt").exists())
+        self.assertIn("raw logging disabled", Path(result["events_path"]).read_text())
+        self.assertIn("truncated", DELEGATE.bounded_report("a" * 13000))
+        if os.name == "posix":
+            self.assertEqual(Path(result["output_path"]).stat().st_mode & 0o777, 0o600)
+            self.assertEqual(Path(result["result_path"]).parent.stat().st_mode & 0o777, 0o700)
 
     def test_codex_failure_without_detail_is_not_success(self) -> None:
         self.onboard_all()

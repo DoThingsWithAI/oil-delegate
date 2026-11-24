@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -23,6 +24,8 @@ if sys.version_info < (3, 10):
 SCHEMA_VERSION = 1
 SUPPORTED_RUNNERS = (
     "claude",
+    "claude-volces",
+    "claude-minimax",
     "workbuddy",
     "antigravity",
     "codex",
@@ -34,6 +37,8 @@ SUPPORTED_RUNNERS = (
 )
 RUNNER_LABELS = {
     "claude": "Claude Code (claude/cc)",
+    "claude-volces": "Claude Code (Volcengine GLM profile)",
+    "claude-minimax": "Claude Code (MiniMax profile)",
     "workbuddy": "WorkBuddy (codebuddy/cbc/wb)",
     "antigravity": "Antigravity (agy/anti)",
     "codex": "Codex (codex)",
@@ -45,6 +50,8 @@ RUNNER_LABELS = {
 }
 RUNNER_BINARIES = {
     "claude": ("claude",),
+    "claude-volces": ("claude-volces",),
+    "claude-minimax": ("claude-minimax",),
     "workbuddy": ("codebuddy", "cbc"),
     "antigravity": ("agy",),
     "codex": ("codex",),
@@ -57,6 +64,10 @@ RUNNER_BINARIES = {
 RUNNER_ALIASES = {
     "cc": "claude",
     "claude-code": "claude",
+    "volces": "claude-volces",
+    "glm5.3": "claude-volces",
+    "glm-5.3": "claude-volces",
+    "minimax": "claude-minimax",
     "wb": "workbuddy",
     "codebuddy": "workbuddy",
     "cbc": "workbuddy",
@@ -74,6 +85,8 @@ CONTRACT_VERSION = 1
 # Interactive commands that reopen a headless session; {bin} is the detected executable name.
 RESUME_TEMPLATES = {
     "claude": ("{bin}", "--resume", "{sid}"),
+    "claude-volces": ("{bin}", "--resume", "{sid}"),
+    "claude-minimax": ("{bin}", "--resume", "{sid}"),
     "workbuddy": ("{bin}", "--resume", "{sid}"),
     "antigravity": ("{bin}", "--conversation", "{sid}"),
     "codex": ("{bin}", "resume", "{sid}"),
@@ -104,7 +117,60 @@ ROLE_DESCRIPTIONS = {
 ROLE_SLOTS = {"diagnose": 2}
 HOST_AGENT = "host"
 READ_ONLY_UNSUPPORTED = {"kimi"}
-DEFAULT_RUN_TIMEOUT = 3600
+WRITE_SUPPORTED = {"codex", "dsh", "claude", "claude-volces", "claude-minimax"}
+CLAUDE_MIN_VERSION = (2, 1, 314)
+DEFAULT_RUN_TIMEOUT = 900
+MAX_RUN_TIMEOUT = 3600
+MAX_REPORT_CHARS = 12000
+
+# Best-effort filtering, not a filesystem isolation boundary.
+RUNNER_SECRET_ENV = {
+    "claude": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"},
+    "claude-volces": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ARK_API_KEY"},
+    "claude-minimax": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "MINIMAX_API_KEY"},
+    "dsh": {"DEEPSEEK_API_KEY", "DSH_API_KEY"},
+    "codex": {"OPENAI_API_KEY", "CODEX_API_KEY"},
+    "grok": {"XAI_API_KEY"},
+    "cursor": {"CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"},
+    "antigravity": {"GOOGLE_API_KEY", "GEMINI_API_KEY"},
+    "workbuddy": {"CODEBUDDY_API_KEY"},
+}
+
+
+def sensitive_env(name: str) -> bool:
+    name = name.upper()
+    return (
+        any(part in name for part in ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "PRIVATE_KEY", "ACCESS_KEY", "APIKEY"))
+        or name in {"SSH_AUTH_SOCK", "SSH_AGENT_PID", "DATABASE_URL", "DATABASE_URI", "DSN"}
+        or name.startswith(("AWS_", "AZURE_", "GITHUB_", "GH_", "GITLAB_", "VERCEL_", "NEON_", "TURSO_", "GIT_CONFIG"))
+    )
+
+
+def child_environment(runner: str | None = None) -> dict[str, str]:
+    allowed = RUNNER_SECRET_ENV.get(runner or "", set())
+    return {key: value for key, value in os.environ.items()
+            if not sensitive_env(key) or key.upper() in allowed}
+
+
+def redact_secrets(text: str) -> str:
+    values = sorted({value for key, value in os.environ.items()
+                     if sensitive_env(key) and len(value) >= 8}, key=len, reverse=True)
+    for value in values:
+        text = text.replace(value, "[REDACTED]")
+    return text
+
+
+def private_write(path: Path, value: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(value)
+
+
+def bounded_report(value: str) -> str:
+    if len(value) <= MAX_REPORT_CHARS:
+        return value
+    return value[:MAX_REPORT_CHARS] + "\n[Report truncated; request a focused follow-up if needed.]"
+
 
 
 class DelegateError(Exception):
@@ -206,7 +272,7 @@ def chatgpt_codex_candidates() -> tuple[Path, ...]:
 
 
 def detect_binary(runner: str, config: dict[str, Any]) -> dict[str, Any]:
-    env_key = f"OIL_DELEGATE_{runner.upper()}_BIN"
+    env_key = "OIL_DELEGATE_" + runner.upper().replace("-", "_") + "_BIN"
     configured = os.environ.get(env_key) or config.get("runner_paths", {}).get(runner)
     source = "environment" if os.environ.get(env_key) else "config"
     if configured:
@@ -289,6 +355,7 @@ def probe_version(path: str) -> dict[str, Any]:
             capture_output=True,
             text=True,
             timeout=10,
+            env=child_environment(),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -307,6 +374,7 @@ def probe_dsh_capabilities(path: str) -> dict[str, bool | str | None]:
             capture_output=True,
             text=True,
             timeout=15,
+            env=child_environment(),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -446,6 +514,8 @@ def apply_role(config: dict[str, Any], assignment: str) -> list[str]:
             raise DelegateError(
                 f"Role '{role}' runs read-only, which {', '.join(blocked)} cannot guarantee; choose another runner or host"
             )
+    if ROLE_MODES[role] == "write" and any(r not in WRITE_SUPPORTED for r in runners):
+        raise DelegateError("Implement role requires codex, dsh, claude/claude-volces/claude-minimax (restricted editing), or host")
     validate_installed(runners, config)
     if runners:
         enabled = list(config.get("enabled_runners", []))
@@ -492,7 +562,7 @@ def resolve_role(args: argparse.Namespace, config: dict[str, Any]) -> tuple[int,
                 else [r for r in SUPPORTED_RUNNERS if detect_binary(r, config)["installed"]]
             )
             candidates = [HOST_AGENT] + [
-                r for r in pool if not (mode == "read" and r in READ_ONLY_UNSUPPORTED)
+                r for r in pool if (mode == "read" and r not in READ_ONLY_UNSUPPORTED) or (mode == "write" and r in WRITE_SUPPORTED)
             ]
             return EXIT_NEEDS_ROLE_CHOICE, {
                 "status": "NEEDS_ROLE_CHOICE",
@@ -625,6 +695,8 @@ def compose_prompt(prompt: str, workspace: Path, mode: str, files: list[str]) ->
     for raw in files:
         path = Path(raw).expanduser()
         resolved = path.resolve() if path.is_absolute() else (workspace / path).resolve()
+        if not resolved.is_relative_to(workspace):
+            raise DelegateError(f"Entry file is outside workspace: {resolved}")
         if not resolved.is_file():
             raise DelegateError(f"Entry file does not exist: {resolved}")
         resolved_files.append(str(resolved))
@@ -641,6 +713,7 @@ def compose_prompt(prompt: str, workspace: Path, mode: str, files: list[str]) ->
         lines.append("Read only: do not create, edit, delete, or otherwise modify files; avoid side-effecting commands.")
     else:
         lines.append("Keep all changes inside the workspace and within the requested scope.")
+    lines.append("Do not commit, push, deploy, modify databases, access secrets, or change system settings. Ask the host if any such action is needed.")
     lines.extend(
         [
             "Final report: summarize changes or findings, list files involved, give exact verification commands and results, and identify anything blocked or unverified.",
@@ -658,19 +731,37 @@ def build_invocation(
     mode: str,
     dsh_capabilities: dict[str, Any] | None,
 ) -> tuple[list[str], str | None, dict[str, str]]:
+    if mode == "write" and runner not in WRITE_SUPPORTED:
+        raise DelegateError(f"{runner} has no verified workspace-write adapter; choose codex, dsh, claude, claude-volces or claude-minimax")
     env: dict[str, str] = {}
     stdin_input: str | None = None
 
-    if runner == "claude":
+    if runner in ("claude", "claude-volces", "claude-minimax"):
         cmd = [binary]
         if session_id:
             cmd.extend(["--resume", session_id])
         cmd.extend(["-p", prompt, "--output-format", "json"])
-        cmd.extend(
-            ["--permission-mode", "plan", "--permission-prompts", "none"]
-            if mode == "read"
-            else ["--dangerously-skip-permissions"]
-        )
+        # Keep the locally configured provider/model; do not supply --model or credentials.
+        # File tools only: no shell, MCP, web tools or custom hooks. Host runs tests.
+        tools = "Read,Glob,Grep" if mode == "read" else "Read,Glob,Grep,Edit,Write"
+        settings = {
+            "permissions": {
+                "blockReadsOutsideWorkingDirectories": True,
+                "blockWritesOutsideWorkingDirectories": True,
+                "deny": ["Bash", "WebFetch", "WebSearch", "Agent", "mcp__*",
+                         "Read(./.git)", "Edit(./.git)",
+                         "Read(./.env)", "Read(./.env.*)",
+                         "Edit(./.env)", "Edit(./.env.*)"],
+            }
+        }
+        cmd.extend([
+            "--safe-mode", "--setting-sources", "user",
+            "--permission-mode", "plan" if mode == "read" else "acceptEdits",
+            "--permission-prompts", "none", "--tools", tools,
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+            "--disallowedTools", "mcp__*", "--settings",
+            json.dumps(settings, separators=(",", ":")),
+        ])
         return cmd, stdin_input, env
 
     if runner == "workbuddy":
@@ -678,14 +769,8 @@ def build_invocation(
         if session_id:
             cmd.extend(["--resume", session_id])
         cmd.extend(["-p", prompt, "--output-format", "json"])
-        cmd.extend(
-            ["--permission-mode", "plan", "-y"]
-            if mode == "read"
-            else ["--permission-mode", "bypassPermissions", "-y"]
-        )
+        cmd.extend(["--permission-mode", "plan", "-y"])
         env["CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
-        if mode == "write":
-            env["CODEBUDDY_IS_SANDBOX"] = "1"
         return cmd, stdin_input, env
 
     if runner == "antigravity":
@@ -693,14 +778,15 @@ def build_invocation(
         if session_id:
             cmd.extend(["--conversation", session_id])
         cmd.extend(["-p", prompt, "--output-format", "json"])
-        cmd.extend(["--mode", "plan"] if mode == "read" else ["--dangerously-skip-permissions"])
+        cmd.extend(["--mode", "plan"])
         return cmd, stdin_input, env
 
     if runner == "codex":
         if mode == "read":
             permission = ["-c", 'sandbox_mode="read-only"'] if session_id else ["--sandbox", "read-only"]
         else:
-            permission = ["--dangerously-bypass-approvals-and-sandbox"]
+            permission = ["-c", 'sandbox_mode="workspace-write"'] if session_id else ["--sandbox", "workspace-write"]
+        permission.extend(["-c", 'approval_policy="never"'])
         if session_id:
             cmd = [binary, "exec", "resume", "--json", "--skip-git-repo-check", *permission, session_id, "-"]
         else:
@@ -712,7 +798,7 @@ def build_invocation(
         if session_id:
             cmd.extend(["--resume", session_id])
         cmd.extend(["-p", prompt, "--output-format", "json"])
-        cmd.extend(["--permission-mode", "plan"] if mode == "read" else ["--always-approve"])
+        cmd.extend(["--permission-mode", "plan"])
         return cmd, stdin_input, env
 
     if runner == "kimi":
@@ -734,10 +820,14 @@ def build_invocation(
             cmd.extend(["--agent", "plan"])
         cmd.append(prompt)
         permission = {
-            "*": "allow",
-            "edit": "deny" if mode == "read" else "allow",
-            "bash": "deny" if mode == "read" else "allow",
-            "external_directory": "deny" if mode == "read" else "allow",
+            "*": "deny",
+            "read": "allow",
+            "list": "allow",
+            "glob": "allow",
+            "grep": "allow",
+            "edit": "deny",
+            "bash": "deny",
+            "external_directory": "deny",
             "question": "deny",
         }
         env["OPENCODE_PERMISSION"] = json.dumps(permission, separators=(",", ":"))
@@ -750,7 +840,9 @@ def build_invocation(
         if session_id and not capabilities.get("resume"):
             raise DelegateError("This DSH headless installation lacks --session-id; upgrade DSH to resume sessions")
         cmd = [binary, "--profile", "headless"]
-        permission = "read-only" if mode == "read" else "danger-full-access"
+        permission = "read-only" if mode == "read" else "workspace-write"
+        if mode == "write" and not capabilities.get("permission_flag"):
+            raise DelegateError("DSH write requires an explicit --permission-mode flag; upgrade DSH")
         if capabilities.get("permission_flag"):
             cmd.extend(["--permission-mode", permission])
         else:
@@ -763,10 +855,10 @@ def build_invocation(
         return cmd, prompt, env
 
     if runner == "cursor":
-        cmd = [binary, "-p", "--output-format", "json", "--workspace", str(workspace), "--trust"]
+        cmd = [binary, "-p", "--output-format", "json", "--workspace", str(workspace)]
         if session_id:
             cmd.extend(["--resume", session_id])
-        cmd.extend(["--mode", "plan"] if mode == "read" else ["--force"])
+        cmd.extend(["--mode", "plan"])
         return cmd, prompt, env
 
     raise DelegateError(f"Unsupported runner: {runner}")
@@ -869,7 +961,7 @@ def parse_runner_output(
     error: str | None = None
     protocol_ok = True
 
-    if runner in ("claude", "workbuddy", "antigravity", "cursor"):
+    if runner in ("claude", "claude-volces", "claude-minimax", "workbuddy", "antigravity", "cursor"):
         obj = json_object(raw_out)
         if not obj:
             protocol_ok = False
@@ -1042,12 +1134,17 @@ def execute_run(
     if require_enabled and runner not in config.get("enabled_runners", []):
         raise DelegateError(f"Runner '{runner}' is not enabled; enable it with onboard or config")
     workspace = resolve_workspace(args.workspace)
-    if args.timeout <= 0:
-        raise DelegateError("--timeout must be greater than zero")
+    if not 0 < args.timeout <= MAX_RUN_TIMEOUT:
+        raise DelegateError(f"--timeout must be between 1 and {MAX_RUN_TIMEOUT} seconds")
     prompt = compose_prompt(args.prompt, workspace, args.mode, args.file or [])
     binary_info = detect_binary(runner, config)
     if not binary_info["installed"]:
         raise DelegateError(binary_info["error"] or f"Runner not installed: {runner}")
+    if runner in ("claude", "claude-volces", "claude-minimax"):
+        version = probe_version(binary_info["path"])
+        match = re.match(r"^(\d+)\.(\d+)\.(\d+)\b", version.get("version") or "")
+        if version.get("probe_error") or not match or tuple(map(int, match.groups())) < CLAUDE_MIN_VERSION:
+            raise DelegateError("Claude Code 2.1.314 or later is required for restricted local delegation; update the CLI")
     capabilities = probe_dsh_capabilities(binary_info["path"]) if runner == "dsh" else None
     command, stdin_input, env_updates = build_invocation(
         runner,
@@ -1077,7 +1174,7 @@ def execute_run(
 
     run_id = f"{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:10]}"
     run_dir = state_dir / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     paths = {
         "prompt": run_dir / "prompt.txt",
         "stderr": run_dir / "stderr.log",
@@ -1085,13 +1182,14 @@ def execute_run(
         "output": run_dir / "output.md",
         "result": run_dir / "result.json",
     }
-    paths["prompt"].write_text(prompt, encoding="utf-8")
+    if args.keep_raw_logs:
+        private_write(paths["prompt"], redact_secrets(prompt))
     started_at = now_iso()
     started = time.monotonic()
     raw_out = ""
     raw_err = ""
     exit_code = 1
-    env = os.environ.copy()
+    env = child_environment(runner)
     env.update(env_updates)
     if runner == "codex":
         codex_extra_path = Path(binary_info["path"]).parent.parent / "codex-path"
@@ -1132,16 +1230,19 @@ def execute_run(
 
     raw_out = raw_out or ""
     raw_err = raw_err or ""
-    paths["stderr"].write_text(raw_err, encoding="utf-8")
-    paths["events"].write_text(raw_out, encoding="utf-8")
     parsed = parse_runner_output(runner, raw_out, raw_err, exit_code, args.session)
+    private_write(paths["stderr"], redact_secrets(raw_err) if args.keep_raw_logs else "[raw logging disabled]\n")
+    private_write(paths["events"], redact_secrets(raw_out) if args.keep_raw_logs else "[raw logging disabled]\n")
+    parsed["response"] = bounded_report(redact_secrets(parsed["response"] or ""))
+    if parsed["error"]:
+        parsed["error"] = bounded_report(redact_secrets(parsed["error"]))
     elapsed = time.monotonic() - started
     finished_at = now_iso()
 
     markdown = f"## Summary ({runner})\n\n{parsed['response']}\n"
     if parsed["error"]:
         markdown += f"\n## Error\n\n```text\n{parsed['error']}\n```\n"
-    paths["output"].write_text(markdown, encoding="utf-8")
+    private_write(paths["output"], markdown)
     result = {
         **parsed,
         "exit_code": exit_code,
@@ -1193,7 +1294,7 @@ def cmd_run(args: argparse.Namespace, state_dir: Path) -> int:
             exit_code, payload = pending
             emit(payload)
             return exit_code
-    args.mode = args.mode or "write"
+    args.mode = args.mode or "read"
     if not (config.get("onboarded") and config.get("enabled_runners")):
         if args.runner:
             return execute_run(args, state_dir, config, require_enabled=False)
@@ -1247,12 +1348,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--prompt", required=True)
     run.add_argument("--runner")
     run.add_argument("--workspace", default=os.getcwd())
-    run.add_argument("--mode", choices=("read", "write"), help="Defaults to write, or to the role's mode")
+    run.add_argument("--mode", choices=("read", "write"), help="Defaults to read, or to the role's mode")
     run.add_argument("--role", help="review, critique, diagnose or implement; picks the saved agent and mode")
     run.add_argument("--role-slot", type=int, default=1, help="Which saved choice to use for diagnose (1 or 2)")
     run.add_argument("--file", action="append")
     run.add_argument("--session")
     run.add_argument("--timeout", type=int, default=DEFAULT_RUN_TIMEOUT)
+    run.add_argument("--keep-raw-logs", action="store_true", help="Opt in to saving prompt and raw CLI output (may contain sensitive data)")
     run.add_argument("--dry-run", action="store_true")
     run.add_argument(
         "--json",

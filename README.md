@@ -84,6 +84,10 @@ npx skills add DoThingsWithAI/oil-delegate
 
 没有指定 Agent 时，它会使用你的默认选择；如果没有设置默认值，会先问你，不会擅自更换。默认只读；明确授权实现时，仅 Codex 和 DSH 使用 workspace-write。其他 Runner 暂只支持计划/分析（Kimi 暂停）。代码审查、方案评审和疑难会诊这三类用途一律只读。
 
+## 隔离委托（安全增强）
+
+写入或敏感任务优先使用 `scripts/isolated_delegate.py`：从已提交 HEAD 创建独立 Git Worktree，在本机 Docker 中运行 DSH/Codex，不挂载宿主 HOME 和 Docker socket，默认断网且只读；明确授权后才开启网络或写入。修改保留供人工审查，不自动合并。需要可信的本地镜像，详见 [配置、权限边界与续接](references/isolation.md)。
+
 ## 使用条件与边界
 
 - 需要 Python 3.10 或更高版本，以及至少一个已经安装并登录的受支持 Agent。macOS 已实测 Antigravity、Codex 和 Kimi Code 的新建与续接，以及 Antigravity、Codex 的真实写入；其他 Agent 能否直接完成任务，取决于本机登录和模型配置。Linux 和 Windows 尚未实机验证。
